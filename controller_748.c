@@ -8,15 +8,25 @@
 #define SERVER_IP "127.0.0.1"
 #define PORT 9410
 
+#define BUFFER_SIZE 1024
+
+
 int main(void)
 {
     int sock_fd;
+
     struct sockaddr_in server_addr;
 
-    printf("Controller starting...\n");
-    printf("Connecting to %s:%d...\n", SERVER_IP, PORT);
+    char buffer[BUFFER_SIZE];
 
-    /* 1. Create TCP socket */
+
+    printf("Controller starting...\n");
+    printf("Connecting to %s:%d...\n",
+           SERVER_IP,
+           PORT);
+
+
+    /* Create TCP socket */
     sock_fd = socket(AF_INET, SOCK_STREAM, 0);
 
     if (sock_fd == -1)
@@ -25,17 +35,15 @@ int main(void)
         exit(EXIT_FAILURE);
     }
 
-    /* Clear server address structure */
+
     memset(&server_addr, 0, sizeof(server_addr));
 
-    /* IPv4 */
     server_addr.sin_family = AF_INET;
-
-    /* Port 9410 */
     server_addr.sin_port = htons(PORT);
 
-    /* Convert IP address */
-    if (inet_pton(AF_INET, SERVER_IP,
+
+    if (inet_pton(AF_INET,
+                  SERVER_IP,
                   &server_addr.sin_addr) <= 0)
     {
         perror("inet_pton");
@@ -43,7 +51,8 @@ int main(void)
         exit(EXIT_FAILURE);
     }
 
-    /* 2. Connect to Agent */
+
+    /* Connect to Agent */
     if (connect(sock_fd,
                 (struct sockaddr *)&server_addr,
                 sizeof(server_addr)) == -1)
@@ -53,16 +62,46 @@ int main(void)
         exit(EXIT_FAILURE);
     }
 
+
     printf("Connected to Agent successfully.\n");
 
-    /* Keep connection open for testing */
-    printf("TCP connection established.\n");
+
+    /*
+     * Send AUTH command
+     */
+     const char *auth_command = "AUTH OPS-2748\n";
+
+    printf("Sending: %s", auth_command);
+
+    send(sock_fd,
+         auth_command,
+         strlen(auth_command),
+         0);
+
+
+    /*
+     * Receive Agent response
+     */
+    memset(buffer, 0, sizeof(buffer));
+
+    ssize_t bytes_received = recv(sock_fd,
+                                  buffer,
+                                  sizeof(buffer) - 1,
+                                  0);
+
+    if (bytes_received > 0)
+    {
+        buffer[bytes_received] = '\0';
+        printf("Agent response: %s", buffer);
+    }
+
+
+    printf("\nPress Enter to close connection...\n");
 
     getchar();
 
-    close(sock_fd);
 
-    printf("Connection closed.\n");
+    close(sock_fd);
 
     return 0;
 }
