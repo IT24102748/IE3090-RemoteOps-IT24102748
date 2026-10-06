@@ -8,7 +8,7 @@
 #define SERVER_IP "127.0.0.1"
 #define PORT 9410
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 8192
 
 
 int main(void)
@@ -19,26 +19,39 @@ int main(void)
 
     char buffer[BUFFER_SIZE];
 
+    char response[BUFFER_SIZE];
+
 
     printf("Controller starting...\n");
+
     printf("Connecting to %s:%d...\n",
            SERVER_IP,
            PORT);
 
 
-    /* Create TCP socket */
-    sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+    /*
+     * Create TCP socket.
+     */
+    sock_fd = socket(AF_INET,
+                     SOCK_STREAM,
+                     0);
+
 
     if (sock_fd == -1)
     {
         perror("socket");
+
         exit(EXIT_FAILURE);
     }
 
 
-    memset(&server_addr, 0, sizeof(server_addr));
+    memset(&server_addr,
+           0,
+           sizeof(server_addr));
+
 
     server_addr.sin_family = AF_INET;
+
     server_addr.sin_port = htons(PORT);
 
 
@@ -47,18 +60,24 @@ int main(void)
                   &server_addr.sin_addr) <= 0)
     {
         perror("inet_pton");
+
         close(sock_fd);
+
         exit(EXIT_FAILURE);
     }
 
 
-    /* Connect to Agent */
+    /*
+     * Connect to Agent.
+     */
     if (connect(sock_fd,
                 (struct sockaddr *)&server_addr,
                 sizeof(server_addr)) == -1)
     {
         perror("connect");
+
         close(sock_fd);
+
         exit(EXIT_FAILURE);
     }
 
@@ -67,11 +86,13 @@ int main(void)
 
 
     /*
-     * Send AUTH command
+     * AUTHENTICATION
      */
-     const char *auth_command = "AUTH OPS-2748\n";
+    const char *auth_command = "AUTH OPS-2748\n";
+
 
     printf("Sending: %s", auth_command);
+
 
     send(sock_fd,
          auth_command,
@@ -79,29 +100,124 @@ int main(void)
          0);
 
 
-    /*
-     * Receive Agent response
-     */
-    memset(buffer, 0, sizeof(buffer));
+    memset(response,
+           0,
+           sizeof(response));
 
-    ssize_t bytes_received = recv(sock_fd,
-                                  buffer,
-                                  sizeof(buffer) - 1,
-                                  0);
 
-    if (bytes_received > 0)
+    ssize_t bytes_received;
+
+    bytes_received = recv(sock_fd,
+                          response,
+                          sizeof(response) - 1,
+                          0);
+
+
+    if (bytes_received <= 0)
     {
-        buffer[bytes_received] = '\0';
-        printf("Agent response: %s", buffer);
+        printf("Agent disconnected.\n");
+
+        close(sock_fd);
+
+        return 1;
     }
 
 
-    printf("\nPress Enter to close connection...\n");
+    response[bytes_received] = '\0';
 
-    getchar();
+
+    printf("Agent response: %s",
+           response);
+
+
+    /*
+     * Interactive command loop.
+     */
+    while (1)
+    {
+        printf("\nEnter command: ");
+
+        fflush(stdout);
+
+
+        if (fgets(buffer,
+                  sizeof(buffer),
+                  stdin) == NULL)
+        {
+            break;
+        }
+
+
+        /*
+         * Remove newline.
+         */
+        buffer[strcspn(buffer, "\r\n")] = '\0';
+
+
+        /*
+         * Exit command.
+         */
+        if (strcmp(buffer, "EXIT") == 0)
+        {
+            break;
+        }
+
+
+        /*
+         * Send command.
+         */
+        char command_to_send[BUFFER_SIZE];
+
+
+        snprintf(command_to_send,
+                 sizeof(command_to_send),
+                 "%s\n",
+                 buffer);
+
+
+        send(sock_fd,
+             command_to_send,
+             strlen(command_to_send),
+             0);
+
+
+        /*
+         * Receive response.
+         */
+        memset(response,
+               0,
+               sizeof(response));
+
+
+        bytes_received = recv(
+            sock_fd,
+            response,
+            sizeof(response) - 1,
+            0
+        );
+
+
+        if (bytes_received <= 0)
+        {
+            printf("Agent disconnected.\n");
+
+            break;
+        }
+
+
+        response[bytes_received] = '\0';
+
+
+        printf("Agent response:\n%s",
+               response);
+    }
 
 
     close(sock_fd);
+
+
+    printf("Connection closed.\n");
+
 
     return 0;
 }
