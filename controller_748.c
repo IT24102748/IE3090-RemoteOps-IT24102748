@@ -4,220 +4,412 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 #define SERVER_IP "127.0.0.1"
 #define PORT 9410
 
 #define BUFFER_SIZE 8192
 
-
-int main(void)
+/* ---------------------------------------------------------
+   Send all bytes
+   --------------------------------------------------------- */
+int send_all(int fd, const void *buffer, size_t length)
 {
-    int sock_fd;
+    size_t total = 0;
+    const char *data = (const char *)buffer;
 
-    struct sockaddr_in server_addr;
+    while (total < length)
+    {
+        ssize_t sent = send(
+            fd,
+            data + total,
+            length - total,
+            0
+        );
 
+        if (sent <= 0)
+        {
+            return -1;
+        }
+
+        total += sent;
+    }
+
+    return 0;
+}
+
+/* ---------------------------------------------------------
+   Receive and print response
+   --------------------------------------------------------- */
+int receive_response(int socket_fd)
+{
     char buffer[BUFFER_SIZE];
 
-    char response[BUFFER_SIZE];
+    ssize_t received = recv(
+        socket_fd,
+        buffer,
+        sizeof(buffer) - 1,
+        0
+    );
 
+    if (received <= 0)
+    {
+        return -1;
+    }
+
+    buffer[received] = '\0';
+
+    printf(
+        "Agent response:\n%s",
+        buffer
+    );
+
+    /*
+       Add newline if the Agent response didn't have one.
+    */
+    if (received > 0 &&
+        buffer[received - 1] != '\n')
+    {
+        printf("\n");
+    }
+
+    return 0;
+}
+
+/* ---------------------------------------------------------
+   Remove newline from user input
+   --------------------------------------------------------- */
+void remove_newline(char *text)
+{
+    text[strcspn(text, "\r\n")] = '\0';
+}
+
+/* ---------------------------------------------------------
+   PART L - Send file
+   --------------------------------------------------------- */
+int send_file(int socket_fd, const char *filename)
+{
+    FILE *file = fopen(filename, "rb");
+
+    if (file == NULL)
+    {
+        perror("fopen");
+
+        printf(
+            "Could not open file: %s\n",
+            filename
+        );
+
+        return -1;
+    }
+
+    /* Find file size */
+    if (fseek(file, 0, SEEK_END) != 0)
+    {
+        perror("fseek");
+        fclose(file);
+        return -1;
+    }
+
+    long file_size = ftell(file);
+
+    if (file_size < 0)
+    {
+        perror("ftell");
+        fclose(file);
+        return -1;
+    }
+
+    rewind(file);
+
+    printf(
+        "Uploading file: %s\n",
+        filename
+    );
+
+    printf(
+        "File size: %ld bytes\n",
+        file_size
+    );
+
+    /*
+       Send PUT header.
+       Example:
+       PUT test.txt 29
+    */
+
+    char header[BUFFER_SIZE];
+
+    snprintf(
+        header,
+        sizeof(header),
+        "PUT %s %ld\n",
+        filename,
+        file_size
+    );
+
+    printf(
+        "Sending: %s",
+        header
+    );
+
+    if (send_all(
+            socket_fd,
+            header,
+            strlen(header)) < 0)
+    {
+        perror("send");
+        fclose(file);
+        return -1;
+    }
+
+    /*
+       Immediately send exactly the file bytes.
+    */
+
+    char buffer[4096];
+
+    size_t bytes_read;
+
+    while ((bytes_read = fread(
+                buffer,
+                1,
+                sizeof(buffer),
+                file)) > 0)
+    {
+        if (send_all(
+                socket_fd,
+                buffer,
+                bytes_read) < 0)
+        {
+            perror("send file");
+            fclose(file);
+            return -1;
+        }
+    }
+
+    if (ferror(file))
+    {
+        perror("fread");
+        fclose(file);
+        return -1;
+    }
+
+    fclose(file);
+
+    printf(
+        "File bytes sent successfully.\n"
+    );
+
+    return receive_response(socket_fd);
+}
+
+/* ---------------------------------------------------------
+   MAIN
+   --------------------------------------------------------- */
+int main()
+{
+    int socket_fd;
+
+    struct sockaddr_in server_address;
 
     printf("Controller starting...\n");
 
-    printf("Connecting to %s:%d...\n",
-           SERVER_IP,
-           PORT);
+    /* Create socket */
+    socket_fd = socket(
+        AF_INET,
+        SOCK_STREAM,
+        0
+    );
 
-
-    /*
-     * Create TCP socket.
-     */
-    sock_fd = socket(AF_INET,
-                     SOCK_STREAM,
-                     0);
-
-
-    if (sock_fd == -1)
+    if (socket_fd < 0)
     {
         perror("socket");
-
-        exit(EXIT_FAILURE);
-    }
-
-
-    memset(&server_addr,
-           0,
-           sizeof(server_addr));
-
-
-    server_addr.sin_family = AF_INET;
-
-    server_addr.sin_port = htons(PORT);
-
-
-    if (inet_pton(AF_INET,
-                  SERVER_IP,
-                  &server_addr.sin_addr) <= 0)
-    {
-        perror("inet_pton");
-
-        close(sock_fd);
-
-        exit(EXIT_FAILURE);
-    }
-
-
-    /*
-     * Connect to Agent.
-     */
-    if (connect(sock_fd,
-                (struct sockaddr *)&server_addr,
-                sizeof(server_addr)) == -1)
-    {
-        perror("connect");
-
-        close(sock_fd);
-
-        exit(EXIT_FAILURE);
-    }
-
-
-    printf("Connected to Agent successfully.\n");
-
-
-    /*
-     * AUTHENTICATION
-     */
-    const char *auth_command = "AUTH OPS-2748\n";
-
-
-    printf("Sending: %s", auth_command);
-
-
-    send(sock_fd,
-         auth_command,
-         strlen(auth_command),
-         0);
-
-
-    memset(response,
-           0,
-           sizeof(response));
-
-
-    ssize_t bytes_received;
-
-    bytes_received = recv(sock_fd,
-                          response,
-                          sizeof(response) - 1,
-                          0);
-
-
-    if (bytes_received <= 0)
-    {
-        printf("Agent disconnected.\n");
-
-        close(sock_fd);
-
         return 1;
     }
 
+    memset(
+        &server_address,
+        0,
+        sizeof(server_address)
+    );
 
-    response[bytes_received] = '\0';
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(PORT);
 
+    if (inet_pton(
+            AF_INET,
+            SERVER_IP,
+            &server_address.sin_addr) <= 0)
+    {
+        perror("inet_pton");
+        close(socket_fd);
+        return 1;
+    }
 
-    printf("Agent response: %s",
-           response);
+    printf(
+        "Connecting to %s:%d...\n",
+        SERVER_IP,
+        PORT
+    );
 
+    /* Connect */
+    if (connect(
+            socket_fd,
+            (struct sockaddr *)&server_address,
+            sizeof(server_address)) < 0)
+    {
+        perror("connect");
+        close(socket_fd);
+        return 1;
+    }
 
-    /*
-     * Interactive command loop.
-     */
+    printf(
+        "Connected to Agent successfully.\n"
+    );
+
+    /* -----------------------------------------------------
+       AUTH
+       ----------------------------------------------------- */
+
+    const char *auth_command =
+        "AUTH OPS-2748\n";
+
+    printf(
+        "Sending: %s",
+        auth_command
+    );
+
+    if (send_all(
+            socket_fd,
+            auth_command,
+            strlen(auth_command)) < 0)
+    {
+        perror("send");
+        close(socket_fd);
+        return 1;
+    }
+
+    if (receive_response(socket_fd) < 0)
+    {
+        printf(
+            "Failed to receive authentication response.\n"
+        );
+
+        close(socket_fd);
+        return 1;
+    }
+
+    /* -----------------------------------------------------
+       COMMAND LOOP
+       ----------------------------------------------------- */
+
+    char command[BUFFER_SIZE];
+
     while (1)
     {
         printf("\nEnter command: ");
 
-        fflush(stdout);
-
-
-        if (fgets(buffer,
-                  sizeof(buffer),
-                  stdin) == NULL)
+        if (fgets(
+                command,
+                sizeof(command),
+                stdin) == NULL)
         {
             break;
         }
 
+        remove_newline(command);
 
-        /*
-         * Remove newline.
-         */
-        buffer[strcspn(buffer, "\r\n")] = '\0';
-
-
-        /*
-         * Exit command.
-         */
-        if (strcmp(buffer, "EXIT") == 0)
+        if (strlen(command) == 0)
         {
+            continue;
+        }
+
+        /* EXIT */
+        if (strcmp(command, "EXIT") == 0)
+        {
+            char exit_command[] = "EXIT\n";
+
+            send_all(
+                socket_fd,
+                exit_command,
+                strlen(exit_command)
+            );
+
             break;
         }
 
+        /* -------------------------------------------------
+           PUT command
+           Example:
+           PUT test.txt
+           ------------------------------------------------- */
 
-        /*
-         * Send command.
-         */
-        char command_to_send[BUFFER_SIZE];
+        if (strncmp(command, "PUT ", 4) == 0)
+        {
+            const char *filename =
+                command + 4;
 
+            if (strlen(filename) == 0)
+            {
+                printf(
+                    "Usage: PUT <filename>\n"
+                );
 
-        snprintf(command_to_send,
-                 sizeof(command_to_send),
-                 "%s\n",
-                 buffer);
+                continue;
+            }
 
+            send_file(
+                socket_fd,
+                filename
+            );
 
-        send(sock_fd,
-             command_to_send,
-             strlen(command_to_send),
-             0);
+            continue;
+        }
 
+        /* -------------------------------------------------
+           Normal commands
+           ------------------------------------------------- */
 
-        /*
-         * Receive response.
-         */
-        memset(response,
-               0,
-               sizeof(response));
+        char network_command[BUFFER_SIZE + 2];
 
-
-        bytes_received = recv(
-            sock_fd,
-            response,
-            sizeof(response) - 1,
-            0
+        snprintf(
+            network_command,
+            sizeof(network_command),
+            "%s\n",
+            command
         );
 
+        printf(
+            "Sending: %s\n",
+            command
+        );
 
-        if (bytes_received <= 0)
+        if (send_all(
+                socket_fd,
+                network_command,
+                strlen(network_command)) < 0)
         {
-            printf("Agent disconnected.\n");
-
+            perror("send");
             break;
         }
 
+        if (receive_response(socket_fd) < 0)
+        {
+            printf(
+                "Connection closed by Agent.\n"
+            );
 
-        response[bytes_received] = '\0';
-
-
-        printf("Agent response:\n%s",
-               response);
+            break;
+        }
     }
 
+    close(socket_fd);
 
-    close(sock_fd);
-
-
-    printf("Connection closed.\n");
-
+    printf(
+        "Controller closed.\n"
+    );
 
     return 0;
 }
