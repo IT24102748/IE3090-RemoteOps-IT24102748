@@ -813,15 +813,45 @@ int main(void)
          * EXIT
          */
 
-        if (strcmp(command, "EXIT") == 0)
-        {
-            send_command(
-                socket_fd,
-                command
-            );
+        if (strcmp(command, "QUIT") == 0)
+	{
+    		printf("Sending: QUIT\n");
 
-            break;
-        }
+    		if (send_all(
+        	    socket_fd,
+        	    "QUIT\n",
+        	    strlen("QUIT\n")) < 0)
+    		{
+        		perror("send");
+    		}
+        	else
+        	{
+        		char response[BUFFER_SIZE];
+
+        		if (recv_line(
+                		socket_fd,
+                		response,
+                		sizeof(response)) == 0)
+        		{
+        		    printf("Agent response:\n%s\n", response);
+        		}
+        	}
+
+    		/*
+    		 * Stop local UDP monitoring if active.
+    		 */
+
+   		 if (monitor.running)
+    		 {
+        		stop_monitor();
+     		 }
+
+    		 close(socket_fd);
+
+         	printf("Connection closed.\n");
+
+         	break;
+	}
 
         /*
          * PUT
